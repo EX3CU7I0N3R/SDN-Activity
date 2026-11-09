@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+
+# Java and Maven
+target/
+*.class
+*.jar
+
+# IDE files
+.idea/
+.vscode/
+
+# Operating system files
+.DS_Store
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example

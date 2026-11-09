@@ -1,0 +1,56 @@
+ACTIVITY 4: ONOS INTENT FRAMEWORK
+
+1. Start the Diamond topology:
+
+sudo mn --custom ~/diamond.py --topo diamond \
+--controller remote,ip=127.0.0.1,port=6653 \
+--switch ovsk,protocols=OpenFlow13
+
+2. Check available devices:
+
+devices
+
+3. Check discovered hosts:
+
+hosts
+
+4. Check network links:
+
+links
+
+5. Create a bandwidth-constrained host-to-host intent:
+
+add-host-intent -b 10 00:00:00:00:00:01/None 00:00:00:00:00:02/None
+
+6. Verify intent status:
+
+intents
+
+7. Inspect installed intent paths and flow rules:
+
+intents -i
+
+8. Test connectivity:
+
+h1 ping -c 5 10.0.0.2
+
+9. Simulate failure of the active path (Mininet CLI):
+
+link s1 s2 down
+
+10. Verify the remaining links and intent state:
+
+links
+intents
+intents -i
+
+11. Test connectivity after rerouting:
+
+h1 ping -c 10 10.0.0.2
+
+EXPECTED RESULTS:
+
+- Intent 0xa reached INSTALLED state.
+- Initial path: S1 -> S2 -> S4.
+- After the S1-S2 link failure, ONOS rerouted traffic through S1 -> S3 -> S4.
+- Final connectivity test: 10 packets transmitted, 10 received, 0% packet loss.
