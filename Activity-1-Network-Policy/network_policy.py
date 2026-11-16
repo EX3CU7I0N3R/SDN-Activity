@@ -1,180 +1,128 @@
-import requests
-import time
 import os
+import time
+
+import requests
 
 
-# ONOS Controller Configuration
-ONOS_URL = os.getenv("ONOS_URL", "http://localhost:8181/onos/v1")
-USERNAME = os.getenv("ONOS_USERNAME", "onos")
-PASSWORD = os.getenv("ONOS_PASSWORD")
-
-if not PASSWORD:
-    raise ValueError("Please set the ONOS_PASSWORD environment variable.")
-
-# Network Configuration
-DEVICE_ID = "of:0000000000000001"
-SOURCE_IP = "10.0.0.1/32"
-DESTINATION_IP = "10.0.0.2/32"
-
-THRESHOLD_MBPS = 0.001
-POLL_INTERVAL = 10
-
-# Create HTTP session
-session = requests.Session()
-session.auth = (USERNAME, PASSWORD)
+ONOS_URL = os.getenv("ONOS_URL", "http://localhost:8181/onos/v1").rstrip("/")
+ONOS_USERNAME = os.getenv("ONOS_USERNAME", "onos")
+ONOS_PASSWORD = os.getenv("ONOS_PASSWORD")
+SOURCE_IP = os.getenv("SOURCE_IP", "10.0.0.1/32")
+DESTINATION_IP = os.getenv("DESTINATION_IP", "10.0.0.2/32")
+THRESHOLD_MBPS = float(os.getenv("THRESHOLD_MBPS", "0.001"))
+POLL_INTERVAL = float(os.getenv("POLL_INTERVAL", "10"))
+REQUEST_TIMEOUT = 10
 
 
-# Function 1: Fetch connected switches
-def get_switches():
-    response = session.get(f"{ONOS_URL}/devices")
+def create_session():
+    if not ONOS_PASSWORD:
+        raise RuntimeError("Set ONOS_PASSWORD before starting the policy monitor.")
+
+    session = requests.Session()
+    session.auth = (ONOS_USERNAME, ONOS_PASSWORD)
+    return session
+
+
+def get_switches(session):
+    response = session.get(f"{ONOS_URL}/devices", timeout=REQUEST_TIMEOUT)
     response.raise_for_status()
-
-    devices = response.json()["devices"]
-
-    connected_switches = [
+    return [
         device["id"]
-        for device in devices
+        for device in response.json().get("devices", [])
         if device.get("available") is True
     ]
 
-    return connected_switches
 
-
-# Function 2: Fetch port statistics
-def get_port_statistics(device_id):
-    url = f"{ONOS_URL}/statistics/ports/{device_id}"
-
-    response = session.get(url)
+def get_port_statistics(session, device_id):
+    response = session.get(
+        f"{ONOS_URL}/statistics/ports/{device_id}", timeout=REQUEST_TIMEOUT
+    )
     response.raise_for_status()
-
-    data = response.json()
-
-    return data.get("statistics", [])
+    return response.json().get("statistics", [])
 
 
-# Function 3: Calculate bandwidth
-def calculate_bandwidth(current_bytes, previous_bytes, elapsed_time):
-    if previous_bytes is None or elapsed_time <= 0:
-        return 0
+def calculate_bandwidth(current_bytes, previous_sample):
+    if previous_sample is None:
+        return None
 
-    bytes_transferred = max(0, current_bytes - previous_bytes)
+    previous_bytes, previous_time = previous_sample
+    elapsed = time.monotonic() - previous_time
+    if elapsed <= 0:
+        return None
 
-    bandwidth_bps = (bytes_transferred * 8) / elapsed_time
+    transferred = max(0, current_bytes - previous_bytes)
+    return transferred * 8 / elapsed / 1_000_000
 
-    return bandwidth_bps / 1_000_000
 
-
-# Function 4: Block ICMP traffic
-def block_icmp(device_id):
-    url = f"{ONOS_URL}/flows/{device_id}"
-
+def block_icmp(session, device_id):
     flow_rule = {
         "priority": 40000,
         "timeout": 0,
         "isPermanent": True,
         "deviceId": device_id,
-        "treatment": {
-            "instructions": []
-        },
+        "treatment": {"instructions": []},
         "selector": {
             "criteria": [
-                {
-                    "type": "ETH_TYPE",
-                    "ethType": "0x0800"
-                },
-                {
-                    "type": "IP_PROTO",
-                    "protocol": 1
-                },
-                {
-                    "type": "IPV4_SRC",
-                    "ip": SOURCE_IP
-                },
-                {
-                    "type": "IPV4_DST",
-                    "ip": DESTINATION_IP
-                }
+                {"type": "ETH_TYPE", "ethType": "0x0800"},
+                {"type": "IP_PROTO", "protocol": 1},
+                {"type": "IPV4_SRC", "ip": SOURCE_IP},
+                {"type": "IPV4_DST", "ip": DESTINATION_IP},
             ]
-        }
+        },
     }
-
-    response = session.post(url, json=flow_rule)
+    response = session.post(
+        f"{ONOS_URL}/flows/{device_id}", json=flow_rule, timeout=REQUEST_TIMEOUT
+    )
     response.raise_for_status()
 
-    print("ICMP blocking flow rule submitted successfully!")
 
-
-# Main monitoring function
-def main():
-
-    print("Starting SDN Network Policy Engine...")
-
+def monitor(session):
     previous_counters = {}
-    previous_time = time.time()
     blocked_switches = set()
 
+    print("Starting SDN network policy monitor.")
     while True:
-
         try:
-            switches = get_switches()
-
+            switches = get_switches(session)
             if not switches:
                 print("No connected switches found.")
-                time.sleep(POLL_INTERVAL)
-                continue
 
             for device_id in switches:
-
-                print("\nConnected Switch:", device_id)
-
-                statistics = get_port_statistics(device_id)
-
-                current_time = time.time()
-                elapsed_time = current_time - previous_time
-
-                for stat in statistics:
-
-                    for port in stat.get("ports", []):
-
+                for statistic in get_port_statistics(session, device_id):
+                    for port in statistic.get("ports", []):
                         port_id = port["port"]
-                        current_bytes = (
-                            port["bytesReceived"] + port["bytesSent"]
-                        )
-
+                        current_bytes = port["bytesReceived"] + port["bytesSent"]
                         key = (device_id, port_id)
-
-                        previous_bytes = previous_counters.get(key)
-
+                        now = time.monotonic()
                         bandwidth = calculate_bandwidth(
-                            current_bytes,
-                            previous_bytes,
-                            elapsed_time
+                            current_bytes, previous_counters.get(key)
                         )
+                        previous_counters[key] = (current_bytes, now)
 
-                        previous_counters[key] = current_bytes
+                        if bandwidth is None:
+                            continue
 
-                        print(
-                            f"Port {port_id}: "
-                            f"{bandwidth:.4f} Mbps"
-                        )
-
-                        if bandwidth > THRESHOLD_MBPS:
-                            print("Traffic threshold exceeded!")
-
-                            if device_id not in blocked_switches:
-                                block_icmp(device_id)
-                                blocked_switches.add(device_id)
-
-            previous_time = time.time()
-            time.sleep(POLL_INTERVAL)
+                        print(f"{device_id} port {port_id}: {bandwidth:.4f} Mbps")
+                        if bandwidth > THRESHOLD_MBPS and device_id not in blocked_switches:
+                            block_icmp(session, device_id)
+                            blocked_switches.add(device_id)
+                            print(f"ICMP policy installed on {device_id}.")
 
         except requests.exceptions.RequestException as error:
-            print("Controller communication error:", error)
-            time.sleep(POLL_INTERVAL)
+            print(f"ONOS request failed: {error}")
+        except (KeyError, TypeError, ValueError) as error:
+            print(f"Unexpected ONOS response: {error}")
 
-        except KeyboardInterrupt:
-            print("\nNetwork Policy Engine stopped.")
-            break
+        time.sleep(POLL_INTERVAL)
+
+
+def main():
+    if THRESHOLD_MBPS < 0 or POLL_INTERVAL <= 0:
+        raise ValueError("THRESHOLD_MBPS must be nonnegative and POLL_INTERVAL positive.")
+    try:
+        monitor(create_session())
+    except KeyboardInterrupt:
+        print("\nNetwork policy monitor stopped.")
 
 
 if __name__ == "__main__":
