@@ -1,56 +1,38 @@
-# Activity 3: Network Slicing using VLAN and QoS
+# Activity 3: VLAN Network Slicing with QoS
 
-## Objective
-To implement logical network slices using VLAN tagging and Quality of Service (QoS) queues in Open vSwitch.
+This activity separates traffic into VLAN 100 and VLAN 200 and assigns the slices to separate Open vSwitch HTB queues.
 
-## Network Design
-
-Two logical slices were configured:
-
-| Slice | VLAN ID | Queue | Minimum Rate | Maximum Rate |
-|---|---:|---:|---:|---:|
+| Slice | VLAN | Queue | Minimum rate | Maximum rate |
+| --- | ---: | ---: | ---: | ---: |
 | Streaming | 100 | 1 | 50 Mbps | 70 Mbps |
 | Control | 200 | 2 | 5 Mbps | 10 Mbps |
 
-The parent QoS rate was configured to 100 Mbps.
+The parent QoS rate is 100 Mbps. `ovs_commands.sh` configures two trunk ports on one Mininet switch, installs queue-selection flows in both directions, and replaces only the flows marked with this activity's cookie when rerun.
 
-## Implementation
-- Configured VLAN trunking on switch ports.
-- Created Linux HTB QoS queues.
-- Assigned VLAN 100 traffic to Queue 1.
-- Assigned VLAN 200 traffic to Queue 2.
-- Installed OpenFlow 1.3 rules to direct traffic to the corresponding queues.
+## Requirements
 
-## Technologies
-- Mininet
-- Open vSwitch 3.7.1
-- ONOS Controller
-- VLAN
-- OpenFlow 1.3
-- Linux HTB
+- Linux with Mininet and Open vSwitch installed
+- A running bridge (default `s1`) with the two ports used by the traffic path
+- `sudo` access
 
-## Verification Results
+## Run
 
-VLAN 100 connectivity:
-- 10 packets transmitted
-- 10 packets received
-- 0% packet loss
-- Average RTT: 1.159 ms
+```bash
+sudo ./ovs_commands.sh
+```
 
-VLAN 200 connectivity:
-- 10 packets transmitted
-- 10 packets received
-- 0% packet loss
-- Average RTT: 0.379 ms
+Set `SWITCH`, `UPLINK_PORT`, and `DOWNLINK_PORT` to match your topology. For example:
 
-Queue statistics showed 12 packets in each queue and zero errors.
+```bash
+sudo env SWITCH=s2 UPLINK_PORT=3 DOWNLINK_PORT=4 ./ovs_commands.sh
+```
 
-## Important Observation
-The experiment verified VLAN connectivity and queue traffic counters. The ping results do not establish a latency guarantee or prove that one slice has lower latency than the other.
+The script configures switch ports and flows; configure VLAN interfaces on hosts separately so their traffic is tagged with VLAN 100 or 200. Verify with:
 
-## Source Files
-- `ovs_commands.sh`
-- `README.md`
+```bash
+sudo ovs-vsctl list QoS
+sudo ovs-vsctl list Queue
+sudo ovs-ofctl -O OpenFlow13 dump-flows s1
+```
 
-## Execution
-Run the commands in `ovs_commands.sh` in the configured Mininet and Open vSwitch environment. Host VLAN interfaces must also be configured as described in the lab setup.
+The original lab observed successful ping connectivity and queue counters. Those results show reachability and queue use; they do not establish latency guarantees or prove a performance advantage for either slice.
